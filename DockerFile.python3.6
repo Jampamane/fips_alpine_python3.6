@@ -1,0 +1,28 @@
+FROM centos:8
+
+# Enable FIPS mode
+RUN yum install -y dracut-fips
+RUN dracut --add fips --force
+
+# Install development tools and dependencies
+RUN yum groupinstall -y "Development Tools"
+RUN yum install -y gcc zlib-devel bzip2-devel openssl-devel ncurses-devel sqlite-devel readline-devel tk-devel gdbm-devel db4-devel libpcap-devel xz-devel
+
+# Install Python 3.6 from source
+RUN curl -O https://www.python.org/ftp/python/3.6.15/Python-3.6.15.tgz && \
+    tar xvf Python-3.6.15.tgz && \
+    cd Python-3.6.15 && \
+    ./configure --enable-optimizations --with-openssl=/usr/include/openssl && \
+    make altinstall
+
+# Set OpenSSL to use FIPS
+ENV OPENSSL_CONF=/etc/ssl/openssl.cnf
+
+# Test FIPS compliance
+RUN cat /proc/sys/crypto/fips_enabled
+
+# Set the default Python version
+RUN ln -s /usr/local/bin/python3.6 /usr/bin/python3
+RUN ln -s /usr/local/bin/pip3.6 /usr/bin/pip3
+
+CMD ["python3"]
