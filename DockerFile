@@ -1,6 +1,9 @@
-FROM alpine:3.6
+# =========================
+# Stage 1: Build stage
+# =========================
+FROM alpine:3.6 AS builder
 
-# Install build dependencies including perl, zip, unzip
+# Install build dependencies
 RUN apk add --no-cache \
     build-base \
     wget \
@@ -29,7 +32,7 @@ RUN curl -LO https://www.openssl.org/source/openssl-3.0.7.tar.gz && \
     ./config fips no-shared --prefix=/usr/local --openssldir=/usr/local/ssl --libdir=/usr/local/lib && \
     make -j$(nproc) && make install
 
-# Create a FIPS-enabled openssl.cnf
+# Create FIPS-enabled openssl.cnf
 RUN mkdir -p /usr/local/ssl && \
     echo "openssl_conf = openssl_init" > /usr/local/ssl/openssl.cnf && \
     echo "[openssl_init]" >> /usr/local/ssl/openssl.cnf && \
@@ -43,21 +46,38 @@ RUN mkdir -p /usr/local/ssl && \
     echo "[base_sect]" >> /usr/local/ssl/openssl.cnf && \
     echo "activate = 1" >> /usr/local/ssl/openssl.cnf
 
-# Set environment variable to use our FIPS-enabled OpenSSL configuration
-ENV OPENSSL_CONF=/usr/local/ssl/openssl.cnf \
-    LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
-
-# Download Python 3.6.15 and build it against the FIPS-enabled OpenSSL
+# Download Python 3.6.15 and build it against FIPS OpenSSL
 RUN curl -LO https://www.python.org/ftp/python/3.6.15/Python-3.6.15.tgz && \
     tar -xvzf Python-3.6.15.tgz && \
     cd Python-3.6.15 && \
     ./configure --prefix=/usr/local --with-openssl=/usr/local --enable-optimizations && \
-    make -j$(nproc) && make altinstall && \
-    cd .. && rm -rf Python-3.6.15*
+    make -j$(nproc) && make altinstall
+
+# =========================
+# Stage 2: Minimal runtime
+# =========================
+FROM alpine:3.6
+
+# Install runtime dependencies only
+RUN apk add --no-cache bash curl zip unzip libffi zlib readline sqlite ncurses tk gdbm
+
+# Copy binaries and libraries from build stage
+COPY --from=builder /usr/local/bin/python3.6 /usr/local/bin/python3.6
+COPY --from=builder /usr/local/bin/pip3.6 /usr/local/bin/pip3.6
+COPY --from=builder /usr/local/lib /usr/local/lib
+COPY --from=builder /usr/local/ssl /usr/local/ssl
+COPY --from=builder /usr/local/bin/openssl /usr/local/bin/openssl
 
 # Symlink python3 and pip3
 RUN ln -sf /usr/local/bin/python3.6 /usr/bin/python3 && \
     ln -sf /usr/local/bin/pip3.6 /usr/bin/pip3
+
+# Remove Python tests and caches
+RUN rm -rf /usr/local/lib/python3.6/test /usr/local/lib/python3.6/__pycache__ /usr/local/lib/python3.6/ensurepip
+
+# Set environment variable for FIPS OpenSSL
+ENV OPENSSL_CONF=/usr/local/ssl/openssl.cnf \
+    LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 
 # Verify FIPS mode (optional)
 RUN /usr/local/bin/openssl version -a
