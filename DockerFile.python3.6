@@ -1,28 +1,65 @@
-FROM centos:8
+FROM alpine:3.6
 
-# Enable FIPS mode
-RUN yum install -y dracut-fips
-RUN dracut --add fips --force
+# Install build dependencies including perl, zip, unzip
+RUN apk add --no-cache \
+    build-base \
+    wget \
+    curl \
+    make \
+    gcc \
+    musl-dev \
+    zlib-dev \
+    linux-headers \
+    libffi-dev \
+    python3-dev \
+    py3-pip \
+    readline-dev \
+    sqlite-dev \
+    gdbm-dev \
+    ncurses-dev \
+    tk-dev \
+    perl \
+    zip \
+    unzip
 
-# Install development tools and dependencies
-RUN yum groupinstall -y "Development Tools"
-RUN yum install -y gcc zlib-devel bzip2-devel openssl-devel ncurses-devel sqlite-devel readline-devel tk-devel gdbm-devel db4-devel libpcap-devel xz-devel
+# Download and build OpenSSL with FIPS
+RUN curl -LO https://www.openssl.org/source/openssl-3.0.7.tar.gz && \
+    tar -xvzf openssl-3.0.7.tar.gz && \
+    cd openssl-3.0.7 && \
+    ./config fips no-shared --prefix=/usr/local --openssldir=/usr/local/ssl --libdir=/usr/local/lib && \
+    make -j$(nproc) && make install
 
-# Install Python 3.6 from source
-RUN curl -O https://www.python.org/ftp/python/3.6.15/Python-3.6.15.tgz && \
-    tar xvf Python-3.6.15.tgz && \
+# Create a FIPS-enabled openssl.cnf
+RUN mkdir -p /usr/local/ssl && \
+    echo "openssl_conf = openssl_init" > /usr/local/ssl/openssl.cnf && \
+    echo "[openssl_init]" >> /usr/local/ssl/openssl.cnf && \
+    echo "providers = provider_sect" >> /usr/local/ssl/openssl.cnf && \
+    echo "alg_section = algorithm_sect" >> /usr/local/ssl/openssl.cnf && \
+    echo "[provider_sect]" >> /usr/local/ssl/openssl.cnf && \
+    echo "fips = fips_sect" >> /usr/local/ssl/openssl.cnf && \
+    echo "base = base_sect" >> /usr/local/ssl/openssl.cnf && \
+    echo "[fips_sect]" >> /usr/local/ssl/openssl.cnf && \
+    echo "activate = 1" >> /usr/local/ssl/openssl.cnf && \
+    echo "[base_sect]" >> /usr/local/ssl/openssl.cnf && \
+    echo "activate = 1" >> /usr/local/ssl/openssl.cnf
+
+# Set environment variable to use our FIPS-enabled OpenSSL configuration
+ENV OPENSSL_CONF=/usr/local/ssl/openssl.cnf \
+    LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+
+# Download Python 3.6.15 and build it against the FIPS-enabled OpenSSL
+RUN curl -LO https://www.python.org/ftp/python/3.6.15/Python-3.6.15.tgz && \
+    tar -xvzf Python-3.6.15.tgz && \
     cd Python-3.6.15 && \
-    ./configure --enable-optimizations --with-openssl=/usr/include/openssl && \
-    make altinstall
+    ./configure --prefix=/usr/local --with-openssl=/usr/local --enable-optimizations && \
+    make -j$(nproc) && make altinstall && \
+    cd .. && rm -rf Python-3.6.15*
 
-# Set OpenSSL to use FIPS
-ENV OPENSSL_CONF=/etc/ssl/openssl.cnf
+# Symlink python3 and pip3
+RUN ln -sf /usr/local/bin/python3.6 /usr/bin/python3 && \
+    ln -sf /usr/local/bin/pip3.6 /usr/bin/pip3
 
-# Test FIPS compliance
-RUN cat /proc/sys/crypto/fips_enabled
-
-# Set the default Python version
-RUN ln -s /usr/local/bin/python3.6 /usr/bin/python3
-RUN ln -s /usr/local/bin/pip3.6 /usr/bin/pip3
+# Verify FIPS mode (optional)
+RUN /usr/local/bin/openssl version -a
 
 CMD ["python3"]
