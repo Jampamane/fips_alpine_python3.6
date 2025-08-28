@@ -1,36 +1,39 @@
-# =========================
 # Stage 1: Build stage
-# =========================
 FROM alpine:3.6 AS builder
 
-# Install build dependencies
+# Install build dependencies and entropy daemon
 RUN apk add --no-cache \
     build-base \
-    wget \
     curl \
+    wget \
     make \
     gcc \
     musl-dev \
     zlib-dev \
     linux-headers \
     libffi-dev \
-    python3-dev \
-    py3-pip \
+    perl \
+    nasm \
     readline-dev \
     sqlite-dev \
     gdbm-dev \
     ncurses-dev \
     tk-dev \
-    perl \
     zip \
-    unzip
+    unzip \
+    haveged
 
-# Download and build OpenSSL with FIPS
-RUN curl -LO https://www.openssl.org/source/openssl-3.0.7.tar.gz && \
-    tar -xvzf openssl-3.0.7.tar.gz && \
-    cd openssl-3.0.7 && \
+# Ensure OpenSSL RNG uses urandom
+ENV RANDFILE=/dev/urandom
+
+# Download and build FIPS OpenSSL
+ENV OPENSSL_VERSION=3.0.7
+RUN curl -LO https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz && \
+    tar -xvzf openssl-${OPENSSL_VERSION}.tar.gz && \
+    cd openssl-${OPENSSL_VERSION} && \
     ./config fips no-shared --prefix=/usr/local --openssldir=/usr/local/ssl --libdir=/usr/local/lib && \
-    make -j$(nproc) && make install
+    make -j$(nproc) && make install && \
+    cd .. && rm -rf openssl-${OPENSSL_VERSION}*
 
 # Create FIPS-enabled openssl.cnf
 RUN mkdir -p /usr/local/ssl && \
@@ -46,40 +49,49 @@ RUN mkdir -p /usr/local/ssl && \
     echo "[base_sect]" >> /usr/local/ssl/openssl.cnf && \
     echo "activate = 1" >> /usr/local/ssl/openssl.cnf
 
-# Download Python 3.6.15 and build it against FIPS OpenSSL
-RUN curl -LO https://www.python.org/ftp/python/3.6.15/Python-3.6.15.tgz && \
-    tar -xvzf Python-3.6.15.tgz && \
-    cd Python-3.6.15 && \
+# Set environment for Python build
+ENV LD_LIBRARY_PATH=/usr/local/lib
+ENV OPENSSL_CONF=/usr/local/ssl/openssl.cnf
+
+# Download and build Python 3.6.15
+ENV PYTHON_VERSION=3.6.15
+RUN curl -LO https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tgz && \
+    tar -xvzf Python-${PYTHON_VERSION}.tgz && \
+    cd Python-${PYTHON_VERSION} && \
     ./configure --prefix=/usr/local --with-openssl=/usr/local --enable-optimizations --enable-shared && \
-    make -j$(nproc) && make altinstall
-
-# =========================
-# Stage 2: Minimal runtime
-# =========================
-FROM alpine:3.6
-
-# Install runtime dependencies only
-RUN apk add --no-cache bash curl zip unzip libffi zlib readline sqlite ncurses tk gdbm binutils
-
-# Copy binaries and libraries from build stage
-COPY --from=builder /usr/local/bin/python3.6 /usr/local/bin/python3.6
-COPY --from=builder /usr/local/bin/pip3.6 /usr/local/bin/pip3.6
-COPY --from=builder /usr/local/lib /usr/local/lib
-COPY --from=builder /usr/local/ssl /usr/local/ssl
-COPY --from=builder /usr/local/bin/openssl /usr/local/bin/openssl
+    make -j$(nproc) && make altinstall && \
+    cd .. && rm -rf Python-${PYTHON_VERSION}*
 
 # Symlink python3 and pip3
 RUN ln -sf /usr/local/bin/python3.6 /usr/bin/python3 && \
     ln -sf /usr/local/bin/pip3.6 /usr/bin/pip3
 
-# Remove Python tests and caches
-RUN rm -rf /usr/local/lib/python3.6/test /usr/local/lib/python3.6/__pycache__ /usr/local/lib/python3.6/ensurepip
+# Stage 2: Final image (smaller)
+FROM alpine:3.6
 
-# Set environment variable for FIPS OpenSSL
-ENV OPENSSL_CONF=/usr/local/ssl/openssl.cnf \
-    LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+# Copy Python and OpenSSL from builder
+COPY --from=builder /usr/local /usr/local
 
-# Verify FIPS mode (optional)
+# Set FIPS environment variables
+ENV LD_LIBRARY_PATH=/usr/local/lib
+ENV OPENSSL_CONF=/usr/local/ssl/openssl.cnf
+ENV RANDFILE=/dev/urandom
+
+# Install runtime dependencies only
+RUN apk add --no-cache \
+    zlib \
+    libffi \
+    readline \
+    sqlite \
+    ncurses \
+    tk \
+    bash \
+    curl \
+    zip \
+    unzip \
+    binutils
+
+# Verify FIPS-enabled OpenSSL (optional)
 RUN /usr/local/bin/openssl version -a
 
 CMD ["python3"]
