@@ -31,13 +31,20 @@ ENV OPENSSL_VERSION=3.0.7
 RUN curl -LO https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz && \
     tar -xvzf openssl-${OPENSSL_VERSION}.tar.gz && \
     cd openssl-${OPENSSL_VERSION} && \
-    ./config fips no-shared --prefix=/usr/local --openssldir=/usr/local/ssl --libdir=/usr/local/lib && \
+    ./config enable-fips no-shared --prefix=/usr/local --openssldir=/usr/local/ssl --libdir=/usr/local/lib && \
     make -j$(nproc) && make install && \
     cd .. && rm -rf openssl-${OPENSSL_VERSION}*
+
+# Run fipsinstall to generate fipsmodule.cnf
+RUN /usr/local/bin/openssl fipsinstall \
+      -module /usr/local/lib/ossl-modules/fips.so \
+      -out /usr/local/ssl/fipsmodule.cnf \
+      -provider_name fips
 
 # Create FIPS-enabled openssl.cnf
 RUN mkdir -p /usr/local/ssl && \
     echo "openssl_conf = openssl_init" > /usr/local/ssl/openssl.cnf && \
+    echo ".include /usr/local/ssl/fipsmodule.cnf" >> /usr/local/ssl/openssl.cnf && \
     echo "[openssl_init]" >> /usr/local/ssl/openssl.cnf && \
     echo "providers = provider_sect" >> /usr/local/ssl/openssl.cnf && \
     echo "alg_section = algorithm_sect" >> /usr/local/ssl/openssl.cnf && \
@@ -47,7 +54,9 @@ RUN mkdir -p /usr/local/ssl && \
     echo "[fips_sect]" >> /usr/local/ssl/openssl.cnf && \
     echo "activate = 1" >> /usr/local/ssl/openssl.cnf && \
     echo "[base_sect]" >> /usr/local/ssl/openssl.cnf && \
-    echo "activate = 1" >> /usr/local/ssl/openssl.cnf
+    echo "activate = 1" >> /usr/local/ssl/openssl.cnf \
+    echo "[algorithm_sect]" >> /usr/local/ssl/openssl.cnf && \
+    echo "default_properties = fips=yes" >> /usr/local/ssl/openssl.cnf
 
 # Set environment for Python build
 ENV LD_LIBRARY_PATH=/usr/local/lib
