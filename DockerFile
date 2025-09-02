@@ -1,5 +1,5 @@
 # Stage 1: Build stage
-FROM alpine:3.6 AS builder
+FROM alpine:3.6
 
 # Install build dependencies and entropy daemon
 RUN apk add --no-cache \
@@ -21,7 +21,15 @@ RUN apk add --no-cache \
     tk-dev \
     zip \
     unzip \
-    haveged
+    haveged \
+    binutils \
+    zlib \
+    libffi \
+    readline \
+    sqlite \
+    ncurses \
+    tk \
+    bash
 
 # Ensure OpenSSL RNG uses urandom
 ENV RANDFILE=/dev/urandom
@@ -75,32 +83,8 @@ RUN curl -LO https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON
 RUN ln -sf /usr/local/bin/python3.6 /usr/bin/python3 && \
     ln -sf /usr/local/bin/pip3.6 /usr/bin/pip3
 
-# Stage 2: Final image (smaller)
-FROM alpine:3.6
+RUN python3.6 -m pip install --upgrade pip
 
-# Copy Python and OpenSSL from builder
-COPY --from=builder /usr/local /usr/local
-
-# Set FIPS environment variables
-ENV LD_LIBRARY_PATH=/usr/local/lib
-ENV OPENSSL_CONF=/usr/local/ssl/openssl.cnf
-ENV RANDFILE=/dev/urandom
-
-# Install runtime dependencies only
-RUN apk add --no-cache \
-    zlib \
-    libffi \
-    readline \
-    sqlite \
-    ncurses \
-    tk \
-    bash \
-    curl \
-    zip \
-    unzip \
-    binutils
-
-# Verify FIPS-enabled OpenSSL (optional)
 RUN /usr/local/bin/openssl version -a
 
 CMD ["python3"]
